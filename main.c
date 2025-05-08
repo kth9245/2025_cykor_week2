@@ -8,7 +8,6 @@
 #include <pwd.h>
 #include "cd.h"
 #include "pwd.h"
-#include "exit.h"
 
 #define MAX_CMD_LEN 1024
 #define MAX_ARG_NUM 64
@@ -22,9 +21,16 @@ typedef struct {
 cmds *command_list[] = {
     &(cmds){ "cd", run_cd },
     &(cmds){ "pwd", run_pwd },
-    &(cmds){ "exit", run_exit },
     NULL
 };
+
+typedef enum { CMD_NORMAL, CMD_AND, CMD_OR, CMD_BG } OpType;
+
+typedef struct {
+    char* cmd;
+    OpType op_type;
+    struct op* next;
+} op;
 
 void print_directory() {
     char cwd[1024];
@@ -47,8 +53,9 @@ int run_builtin(char **args, int *ret) {
     return -1;
 }
 
-int execute_subcmd(char *subcmd) {
+int execute_subcmd(char *subcmd, int is_bg) {
     int ret = 0;
+
     if (!strchr(subcmd, '|')) {
         char *args[64];
         int i = 0;
@@ -68,10 +75,20 @@ int execute_subcmd(char *subcmd) {
             perror("execvp");
             return 1;
         } else if (pid > 0) {
+            if (is_bg) return 0;
             int status;
             waitpid(pid, &status, 0);
             return WEXITSTATUS(status);
         } else {
+            perror("fork");
+            return 1;
+        }
+    }
+
+    if (is_bg){
+        pid_t pid_bg = fork();
+        if (pid_bg > 0) return 0;
+        else if (pid_bg == -1) {
             perror("fork");
             return 1;
         }
@@ -132,35 +149,59 @@ int execute_subcmd(char *subcmd) {
 }
 
 void parse_cmd(char* cmd) {
-    unsigned int ret_val = 0;
-    unsigned int op_val = 0;
+    op *head = NULL;
+    op *tail = NULL;
+    int len = strlen(cmd);
+    int ret_val = 0;
+    int keep = 1;
 
-    while (cmd) {
-        char *and_pos = strstr(cmd, "&&");
-        char *or_pos = strstr(cmd, "||");
-        char *split_pos = NULL;
-    
-        if (and_pos && (!or_pos || and_pos < or_pos)) {
-            split_pos = and_pos;
-            op_val = 0;
-        } else if (or_pos) {
-            split_pos = or_pos;
-            op_val = 1;
-        }
-    
-        char *subcmd;
-        if (split_pos) {
-            subcmd = strndup(cmd, split_pos - cmd);
-        } else {
-            subcmd = strdup(cmd);
-        }
-        ret_val = execute_subcmd(subcmd);
-        free(subcmd);
-        if (ret_val == 0xFF) exit(1);
+    for (int i = 0; i < len;){
+        int j = i;
+        OpType type = CMD_NORMAL;
         
-        if (op_val != ret_val) break;
+        while (j < len){
+            if (j + 1 < len && cmd[j] == '&' && cmd[j + 1] == '&') {
+                type = CMD_AND;
+                break;
+            }
+            if (j + 1 < len && cmd[j] == '|' && cmd[j + 1] == '|') {
+                type = CMD_OR;
+                break;
+            }
+            if (cmd[j] == '&') {
+                type = CMD_BG;
+                break;
+            }
+            j++;
+        }
+        int cmd_len = j - i;
+        while (cmd_len > 0 && cmd[i + cmd_len - 1] == ' ') cmd_len--;
+        while (cmd_len > 0 && cmd[i] == ' ') { i++; cmd_len--; }
 
-        cmd = split_pos ? split_pos + 2 : NULL;
+        char *cm = strndup(cmd + i, cmd_len);
+        op *node = malloc(sizeof(op));
+
+        node->cmd = cm;
+        node->op_type = type;
+        node->next = NULL;
+
+        if (tail) tail->next = node;
+        else head = node;
+        tail = node;
+
+        if (type == CMD_AND || type == CMD_OR) i = j + 2;
+        else if (type == CMD_BG) i = j + 1;
+        else break;
+    }
+
+
+    for (op* iter = head; iter != NULL; iter = iter->next){
+        if (keep) ret_val = execute_subcmd(iter->cmd, iter->op_type==CMD_BG);
+        
+        if (keep && iter->op_type == CMD_AND && ret_val != 0) keep = 0;
+        else if (keep &&iter->op_type == CMD_OR && ret_val == 0) keep = 0;
+        free(iter->cmd);
+        free(iter);
     }
 }
 
@@ -172,6 +213,7 @@ int main() {
         memset(line, 0, sizeof(line));
         if (!fgets(line, sizeof(line) - 1, stdin)) break;
         line[strcspn(line, "\n")] = 0;
+        if (strncmp(line, "exit", 4) == 0) break;
         char *saveptr;
         char *cmd = strtok_r(line, ";", &saveptr);
         while (cmd) {

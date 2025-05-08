@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -g
-OBJ = main.o cd.o pwd.o exit.o
+OBJ = main.o cd.o pwd.o
 TARGET = shell
 
 all: $(TARGET)
