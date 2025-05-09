@@ -11,7 +11,6 @@
 
 #define MAX_CMD_LEN 1024
 #define MAX_ARG_NUM 64
-#define EXIT 0xFF
 
 typedef struct {
     const char *name;
@@ -73,7 +72,7 @@ int execute_subcmd(char *subcmd, int is_bg) {
         if (pid == 0) {
             execvp(args[0], args);
             perror("execvp");
-            return 1;
+            exit(1);
         } else if (pid > 0) {
             if (is_bg) return 0;
             int status;
@@ -133,9 +132,12 @@ int execute_subcmd(char *subcmd, int is_bg) {
             }
             args[j] = NULL;
             if (args[0] == NULL) return 1;
+
+            int ret_val;
+            if (run_builtin(args, &ret_val) == 0) exit(1);
             execvp(args[0], args);
             perror("execvp");
-            return 1;
+            exit(1);
         } else {
             if (prev_fd != -1) close(prev_fd);
             if (i < count - 1) {
@@ -153,7 +155,6 @@ void parse_cmd(char* cmd) {
     op *tail = NULL;
     int len = strlen(cmd);
     int ret_val = 0;
-    int keep = 1;
 
     for (int i = 0; i < len;){
         int j = i;
@@ -194,12 +195,12 @@ void parse_cmd(char* cmd) {
         else break;
     }
 
-
+    int keep = 1;
     for (op* iter = head; iter != NULL; iter = iter->next){
         if (keep) ret_val = execute_subcmd(iter->cmd, iter->op_type==CMD_BG);
-        
         if (keep && iter->op_type == CMD_AND && ret_val != 0) keep = 0;
         else if (keep &&iter->op_type == CMD_OR && ret_val == 0) keep = 0;
+
         free(iter->cmd);
         free(iter);
     }
