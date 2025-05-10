@@ -6,11 +6,12 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <pwd.h>
+#include <signal.h>
+
 #include "cd.h"
 #include "pwd.h"
 
 #define MAX_CMD_LEN 1024
-#define MAX_ARG_NUM 64
 
 typedef struct {
     const char *name;
@@ -206,7 +207,12 @@ void parse_cmd(char* cmd) {
     }
 }
 
+void sigchld_handler(int sig) {
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
 int main() {
+    signal(SIGCHLD, sigchld_handler);
     char line[MAX_CMD_LEN];
 
     while (1) {
